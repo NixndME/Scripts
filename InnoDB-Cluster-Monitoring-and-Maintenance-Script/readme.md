@@ -23,7 +23,7 @@ This script provides a set of tools for monitoring and maintaining a MySQL InnoD
 
 1. Download the script:
    ```
-   wget [[https://example.com/path/to/mysql_monitor.sh](https://github.com/NixndME/Scripts/blob/main/InnoDB-Cluster-Monitoring-and-Maintenance-Script/innodb.sh)](https://github.com/NixndME/Scripts/blob/main/InnoDB-Cluster-Monitoring-and-Maintenance-Script/innodb.sh)
+   wget https://github.com/NixndME/Scripts/blob/main/InnoDB-Cluster-Monitoring-and-Maintenance-Script/innodb.sh
    ```
 
 2. Make the script executable:
