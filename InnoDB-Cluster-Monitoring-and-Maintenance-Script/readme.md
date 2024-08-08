@@ -47,7 +47,7 @@ This script provides a set of tools for monitoring and maintaining a MySQL InnoD
 Run the script without any arguments to enter interactive mode:
 
 ```
-./mysql_monitor.sh
+./innodb.sh
 ```
 
 This will display a menu with options to perform various tasks.
@@ -63,7 +63,7 @@ The script supports the following command-line options:
 
 Example:
 ```
-./mysql_monitor.sh --status
+./innodb.sh --status
 ```
 
 ## Logging
