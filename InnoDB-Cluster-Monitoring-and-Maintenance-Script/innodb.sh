@@ -48,10 +48,12 @@ view_mysql_usage() {
     echo "MySQL Disk Usage:"
     df -h /var/lib/mysql || handle_error "Failed to get MySQL disk usage"
     echo
+    echo "Top 5 largest files/directories in MySQL data directory:"
+    du -sh /var/lib/mysql/* | sort -rh | head -n 5
+    echo
     echo "Detailed MySQL Data Directory Information:"
     echo "----------------------------------------"
     du -sh /var/lib/mysql/* | sort -hr
-    echo
     echo "Total MySQL Data Directory Size:"
     du -sh /var/lib/mysql
 }
