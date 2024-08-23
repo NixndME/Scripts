@@ -53,13 +53,6 @@ rabbit@node3: ONLINE
 - 0: All nodes are online
 - 1: At least one node is offline
 
-## Integration with SolarWinds
-
-1. Create a new Custom Script Monitor in SolarWinds.
-2. Set the script path to `/opt/scripts/check_rabbitmq_cluster_status.sh`.
-3. Configure the monitor to alert based on the script's exit code:
-   - Exit code 0 indicates all nodes are online
-   - Exit code 1 indicates at least one node is offline
 
 ## Notes
 
