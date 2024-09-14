@@ -49,39 +49,48 @@ check_static_ip() {
 check_proxy() {
     proxy_set=false
     no_proxy_correct=false
-
+    
     # Check if proxy is set
     if env | grep -Eiq '(http_proxy|https_proxy|ftp_proxy)'; then
         proxy_set=true
     fi
-
-    # Check no_proxy in /etc/profile
-    if grep -q 'export no_proxy=.*localhost.*,127\.0\.0\.1' /etc/profile 2>/dev/null; then
-        no_proxy_correct=true
-    fi
-
-    # Check Acquire::http::Proxy and Acquire::https::Proxy in /etc/apt/apt.conf.d/99no-proxy
-    if grep -qE 'Acquire::(http|https)::Proxy.*("127\.0\.0\.1"|"localhost").*"DIRECT"' /etc/apt/apt.conf.d/99no-proxy 2>/dev/null; then
-        no_proxy_correct=true
-    fi
-
-    # Check proxy settings in /etc/apt/apt.conf
-    if grep -q 'Acquire::(http|https)::proxy' /etc/apt/apt.conf 2>/dev/null; then
+    
+    # Check proxy settings in various files
+    if grep -q 'Acquire::(http|https)::proxy' /etc/apt/apt.conf 2>/dev/null || \
+       grep -q 'export.*_proxy=' /etc/profile 2>/dev/null || \
+       grep -q 'Acquire::(http|https)::Proxy' /etc/apt/apt.conf.d/99no-proxy 2>/dev/null; then
         proxy_set=true
     fi
-
+    
+    # If proxy is set, check for correct no_proxy settings
     if $proxy_set; then
-        if $no_proxy_correct; then
-            echo -e "${GREEN}✔ Proxy is set, and localhost/127.0.0.1 is correctly configured in no_proxy.${NC}"
-            return 0
-        else
-            echo -e "${RED}✘ Proxy is set, but localhost/127.0.0.1 might not be correctly configured in no_proxy.${NC}"
-            echo -e "${YELLOW}   Tip: Check /etc/profile and /etc/apt/apt.conf.d/99no-proxy for correct no_proxy settings.${NC}"
-            return 1
+        if grep -q 'export no_proxy=.*localhost.*,127\.0\.0\.1' /etc/profile 2>/dev/null || \
+           grep -qE 'Acquire::(http|https)::Proxy.*("127\.0\.0\.1"|"localhost").*"DIRECT"' /etc/apt/apt.conf.d/99no-proxy 2>/dev/null; then
+            no_proxy_correct=true
         fi
+    fi
+    
+    # Check internet connectivity
+    if ping -c 1 8.8.8.8 &> /dev/null; then
+        internet_access=true
     else
-        echo -e "${GREEN}✔ No proxy is set.${NC}"
+        internet_access=false
+    fi
+    
+    # Evaluate scenarios
+    if ! $proxy_set && $internet_access; then
+        echo -e "${GREEN}✔ No proxy set and internet is accessible. Suitable for MVM installation.${NC}"
         return 0
+    elif ! $proxy_set && ! $internet_access; then
+        echo -e "${RED}✘ No proxy set but internet is not accessible. MVM installation may face issues.${NC}"
+        return 1
+    elif $proxy_set && $no_proxy_correct; then
+        echo -e "${GREEN}✔ Proxy is set with correct no_proxy settings for localhost/127.0.0.1. Suitable for MVM installation.${NC}"
+        return 0
+    elif $proxy_set && ! $no_proxy_correct; then
+        echo -e "${RED}✘ Proxy is set but no_proxy settings for localhost/127.0.0.1 are missing or incorrect.${NC}"
+        echo -e "${YELLOW}   Tip: Add 'localhost,127.0.0.1' to no_proxy in /etc/profile or /etc/apt/apt.conf.d/99no-proxy${NC}"
+        return 1
     fi
 }
 
