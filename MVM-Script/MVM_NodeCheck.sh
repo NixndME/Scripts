@@ -106,11 +106,51 @@ check_disk_size() {
     fi
 }
 
+# Function to check Morpheus connectivity
+check_morpheus_connectivity() {
+    local morpheus_hostname=$1
+    local morpheus_ip=$2
+
+    echo -e "\n${YELLOW}Checking Morpheus connectivity...${NC}"
+
+    # Try connecting using hostname
+    if curl -s "https://${morpheus_hostname}/ping" -k | grep -q "MORPHEUS PING"; then
+        echo -e "${GREEN}✔ Successfully connected to Morpheus using hostname: ${morpheus_hostname}${NC}"
+        return 0
+    # Try connecting using IP address
+    elif curl -s "https://${morpheus_ip}/ping" -k | grep -q "MORPHEUS PING"; then
+        echo -e "${GREEN}✔ Successfully connected to Morpheus using IP: ${morpheus_ip}${NC}"
+        return 0
+    else
+        echo -e "${RED}✘ Failed to connect to Morpheus using both hostname and IP${NC}"
+        return 1
+    fi
+}
+
+# Function to check if Morpheus details are in /etc/hosts
+check_etc_hosts() {
+    local morpheus_hostname=$1
+    local morpheus_ip=$2
+
+    echo -e "\n${YELLOW}Checking if Morpheus details are in /etc/hosts...${NC}"
+
+    if grep -q "${morpheus_ip}\s*${morpheus_hostname}" /etc/hosts; then
+        echo -e "${GREEN}✔ Morpheus details found in /etc/hosts${NC}"
+        return 0
+    else
+        echo -e "${RED}✘ Morpheus details not found in /etc/hosts${NC}"
+        echo -e "${YELLOW}   Tip: Add '${morpheus_ip} ${morpheus_hostname}' to /etc/hosts${NC}"
+        return 1
+    fi
+}
+
 # Initialize variables to store check results
 kvm_check=""
 static_ip_check=""
 proxy_check=""
 disk_size_check=""
+morpheus_connectivity_check=""
+etc_hosts_check=""
 
 # Function to set check results
 set_result() {
@@ -119,6 +159,8 @@ set_result() {
         "Static IP") static_ip_check=$2 ;;
         "Proxy Settings") proxy_check=$2 ;;
         "Disk Size") disk_size_check=$2 ;;
+        "Morpheus Connectivity") morpheus_connectivity_check=$2 ;;
+        "Morpheus in /etc/hosts") etc_hosts_check=$2 ;;
     esac
 }
 
@@ -126,6 +168,10 @@ set_result() {
 echo -e "${YELLOW}Running system checks for MVM Readiness on Ubuntu 22.04...${NC}\n"
 
 display_server_info
+
+# Get Morpheus details
+read -p "Enter Morpheus Hostname: " morpheus_hostname
+read -p "Enter Morpheus IP address: " morpheus_ip
 
 # Perform checks
 check_kvm
@@ -140,16 +186,24 @@ set_result "Proxy Settings" $?
 check_disk_size
 set_result "Disk Size" $?
 
+check_morpheus_connectivity "$morpheus_hostname" "$morpheus_ip"
+set_result "Morpheus Connectivity" $?
+
+check_etc_hosts "$morpheus_hostname" "$morpheus_ip"
+set_result "Morpheus in /etc/hosts" $?
+
 echo -e "\n${YELLOW}Summary:${NC}"
 
 # Display summary and check for failures
 failed=false
-for check in "KVM Support" "Static IP" "Proxy Settings" "Disk Size"; do
+for check in "KVM Support" "Static IP" "Proxy Settings" "Disk Size" "Morpheus Connectivity" "Morpheus in /etc/hosts"; do
     case "$check" in
         "KVM Support") result=$kvm_check ;;
         "Static IP") result=$static_ip_check ;;
         "Proxy Settings") result=$proxy_check ;;
         "Disk Size") result=$disk_size_check ;;
+        "Morpheus Connectivity") result=$morpheus_connectivity_check ;;
+        "Morpheus in /etc/hosts") result=$etc_hosts_check ;;
     esac
 
     if [ "$result" = "0" ]; then
