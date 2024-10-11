@@ -27,7 +27,7 @@ except ImportError:
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
 # Configuration variables
-API_KEY = "<%=cypher.read('secret/mysql_secret')%>" # API Key
+API_KEY = "<%=cypher.read('secret/auto_approve')%>" # API Key
 MORPHEUS_URL = "https://morpheus.nixndme.com" # Morphues URL
 START_TIME = "18:00"  # 6 PM IST
 END_TIME = "22:00"    # 10 PM IST
