@@ -131,7 +131,7 @@ def format_for_morpheus(skus: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def main():
     try:
-        api_key = "AIzaSyCpiJrtLNwPlq2n8EwOOh1zUUX9vncGIuE"
+        api_key = "xxxxxxxxxxxxxxxxxxxxx"
         client = GCPPricingClient(api_key)
         
         skus = client.get_compute_skus(max_pages=10)
