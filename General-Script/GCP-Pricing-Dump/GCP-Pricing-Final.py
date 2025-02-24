@@ -250,7 +250,7 @@ def create_price_set_data(category_key, price_ids, region, price_prefix):
     family = category_key.split('/')[0] if '/' in category_key else category_key
     
 
-    price_set_type = 'compute'  
+    price_set_type = 'compute'  # Default type
     if family == 'Storage':
         price_set_type = 'storage'
     
@@ -270,7 +270,7 @@ def process_pricing_data(skus, morpheus_client, region, price_prefix):
     """Process SKUs and create prices and price sets in Morpheus"""
     logger.info("Starting to process pricing data...")
     
-
+ 
     category_groups = {}
     for sku in skus:
         category = sku.get('category', {})
@@ -282,7 +282,7 @@ def process_pricing_data(skus, morpheus_client, region, price_prefix):
     
     for category_key, category_skus in category_groups.items():
         try:
-
+            
             price_ids = []
             for sku in category_skus:
                 price_data = create_price_data(sku, region, price_prefix)
@@ -301,7 +301,7 @@ def process_pricing_data(skus, morpheus_client, region, price_prefix):
                     except Exception as e:
                         logger.error(f"Error processing price: {str(e)}")
                     
-
+            
             if price_ids:
                 price_set_data = create_price_set_data(category_key, price_ids, region, price_prefix)
                 morpheus_client.create_price_set(price_set_data)
