@@ -1,0 +1,137 @@
+apiVersion: v2
+name: morpheus-demo
+description: A simple Helm chart for Morpheus CMP demonstration
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - demo
+  - web
+  - morpheus
+maintainers:
+  - name: Morpheus Demo User
+    email: demo@example.com
+
+---
+# Templates begin here
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: morpheus-demo
+  labels:
+    app: morpheus-demo
+    chart: morpheus-demo-0.1.0
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app: morpheus-demo
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: morpheus-demo
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository | default "nginx" }}:{{ .Values.image.tag | default "stable" }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          volumeMounts:
+            - name: config-volume
+              mountPath: /usr/share/nginx/html
+          resources:
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | default "100m" }}
+              memory: {{ .Values.resources.limits.memory | default "128Mi" }}
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | default "50m" }}
+              memory: {{ .Values.resources.requests.memory | default "64Mi" }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: morpheus-demo-config
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: morpheus-demo
+  labels:
+    app: morpheus-demo
+    chart: morpheus-demo-0.1.0
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.service.port | default 80 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: morpheus-demo
+    release: {{ .Release.Name }}
+
+---
+# ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: morpheus-demo-config
+  labels:
+    app: morpheus-demo
+    chart: morpheus-demo-0.1.0
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Morpheus Demo App</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          margin: 40px;
+          text-align: center;
+          background-color: #f5f5f5;
+        }
+        .container {
+          background-color: white;
+          padding: 20px;
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          max-width: 800px;
+          margin: 0 auto;
+        }
+        h1 {
+          color: #3057b5;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>Morpheus Demo Application</h1>
+        <p>This application was deployed through Morpheus CMP using a Helm chart!</p>
+        <p>Release: {{ .Release.Name }}</p>
+        <p>Namespace: {{ .Release.Namespace }}</p>
+        <p>Deployment timestamp: {{ now | date "2006-01-02 15:04:05" }}</p>
+      </div>
+    </body>
+    </html>
+
+---
+# Default values
+# These are used as fallbacks if no values are provided
+# Morpheus users can override these values when deploying
