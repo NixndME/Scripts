@@ -660,7 +660,7 @@ EOF
             # Install and verify Calico CNI plugin
             log "INFO" "Installing Calico CNI plugin..."
             # Wait for API server to be ready
-            retries=10
+            retries=30
             until kubectl get nodes >/dev/null 2>&1 || [ $retries -eq 0 ]; do
                 log "INFO" "Waiting for Kubernetes API server to be ready... ($retries retries left)"
                 sleep 10
@@ -703,7 +703,7 @@ EOF
 
             # Verify Calico pods are running
             log "INFO" "Verifying Calico CNI plugin installation..."
-            retries=12 # Wait up to 2 minutes (12 * 10 seconds)
+            retries=30 # Wait up to 2 minutes (12 * 10 seconds)
             until kubectl get pods -n kube-system | grep calico | grep -q Running || [ $retries -eq 0 ]; do
                 log "INFO" "Waiting for Calico pods to be in Running state... ($retries retries left)"
                 sleep 10
