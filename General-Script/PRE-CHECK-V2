@@ -1,0 +1,855 @@
+#!/bin/bash
+
+
+set -euo pipefail 
+
+# Color definitions for professional output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly MAGENTA='\033[0;35m'
+readonly WHITE='\033[1;37m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
+
+# Global configuration
+readonly SCRIPT_VERSION="2.0"
+readonly LOG_DIR="/var/log/morpheus-validation"
+readonly LOG_FILE="${LOG_DIR}/system_precheck_$(date +%Y%m%d_%H%M%S).log"
+readonly TEMP_DIR="/tmp/morpheus_precheck_$$"
+readonly HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+
+# Counters for professional reporting
+declare -g TOTAL_CHECKS=0
+declare -g PASSED_CHECKS=0
+declare -g FAILED_CHECKS=0
+declare -g WARNING_CHECKS=0
+declare -g CRITICAL_ISSUES=0
+
+# Morpheus minimum requirements
+readonly MIN_CPU_CORES=4
+readonly MIN_MEMORY_GB=16
+readonly MIN_DISK_SPACE_GB=100
+readonly -a REQUIRED_PORTS=(80 443 22 3306 5432 9200 9300 6379 2181 9092 8080 8443)
+readonly -a REQUIRED_TOOLS=("curl" "wget" "unzip" "tar" "git")
+
+# System variables
+PKG_MANAGER=""
+SERVICE_MANAGER="systemctl"
+DISTRO=""
+VERSION=""
+
+#===============================================================================
+# UTILITY FUNCTIONS
+#===============================================================================
+
+# Enhanced logging with timestamps and levels
+log_message() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+}
+
+# Professional status output with consistent formatting
+print_status() {
+    local status="$1"
+    local message="$2"
+    local details="${3:-}"
+    
+    ((TOTAL_CHECKS++))
+    
+    case $status in
+        "PASS")
+            echo -e "${GREEN}[✓ PASS]${NC} ${message}"
+            [ -n "$details" ] && echo -e "          ${CYAN}└─ ${details}${NC}"
+            ((PASSED_CHECKS++))
+            log_message "PASS" "$message $details"
+            ;;
+        "FAIL")
+            echo -e "${RED}[✗ FAIL]${NC} ${message}"
+            [ -n "$details" ] && echo -e "          ${RED}└─ ${details}${NC}"
+            ((FAILED_CHECKS++))
+            log_message "FAIL" "$message $details"
+            ;;
+        "WARN")
+            echo -e "${YELLOW}[⚠ WARN]${NC} ${message}"
+            [ -n "$details" ] && echo -e "          ${YELLOW}└─ ${details}${NC}"
+            ((WARNING_CHECKS++))
+            log_message "WARN" "$message $details"
+            ;;
+        "CRITICAL")
+            echo -e "${RED}[🚨 CRITICAL]${NC} ${message}"
+            [ -n "$details" ] && echo -e "              ${RED}└─ ${details}${NC}"
+            ((CRITICAL_ISSUES++))
+            ((FAILED_CHECKS++))
+            log_message "CRITICAL" "$message $details"
+            ;;
+        "INFO")
+            echo -e "${BLUE}[ℹ INFO]${NC} ${message}"
+            [ -n "$details" ] && echo -e "          ${BLUE}└─ ${details}${NC}"
+            log_message "INFO" "$message $details"
+            ;;
+    esac
+}
+
+# Professional section headers
+print_section_header() {
+    local title="$1"
+    local width=80
+    local padding=$(( (width - ${#title} - 2) / 2 ))
+    
+    echo ""
+    echo -e "${BOLD}${CYAN}$(printf '═%.0s' $(seq 1 $width))${NC}"
+    printf "${BOLD}${WHITE}%*s %s %*s${NC}\n" $padding "" "$title" $padding ""
+    echo -e "${BOLD}${CYAN}$(printf '═%.0s' $(seq 1 $width))${NC}"
+    echo ""
+}
+
+# Create professional tables
+print_table_header() {
+    local col1_width=25
+    local col2_width=15
+    local col3_width=35
+    
+    echo -e "${BOLD}${WHITE}$(printf '┌─%-*s─┬─%-*s─┬─%-*s─┐' $col1_width '────────────────────────' $col2_width '─────────────' $col3_width '─────────────────────────────────')${NC}"
+    printf "${BOLD}${WHITE}│ %-*s │ %-*s │ %-*s │${NC}\n" $col1_width "Component" $col2_width "Status" $col3_width "Details"
+    echo -e "${BOLD}${WHITE}$(printf '├─%-*s─┼─%-*s─┼─%-*s─┤' $col1_width '────────────────────────' $col2_width '─────────────' $col3_width '─────────────────────────────────')${NC}"
+}
+
+print_table_row() {
+    local component="$1"
+    local status="$2" 
+    local details="$3"
+    local col1_width=25
+    local col2_width=15
+    local col3_width=35
+    
+    local status_color=""
+    case $status in
+        "PASS"|"READY") status_color="${GREEN}" ;;
+        "FAIL"|"MISSING") status_color="${RED}" ;;
+        "WARN"|"PARTIAL") status_color="${YELLOW}" ;;
+        "INFO") status_color="${BLUE}" ;;
+    esac
+    
+    printf "│ %-*s │ ${status_color}%-*s${NC} │ %-*s │\n" $col1_width "$component" $col2_width "$status" $col3_width "$details"
+}
+
+print_table_footer() {
+    local col1_width=25
+    local col2_width=15  
+    local col3_width=35
+    echo -e "${BOLD}${WHITE}$(printf '└─%-*s─┴─%-*s─┴─%-*s─┘' $col1_width '────────────────────────' $col2_width '─────────────' $col3_width '─────────────────────────────────')${NC}"
+}
+
+#===============================================================================
+# INITIALIZATION AND CLEANUP
+#===============================================================================
+
+initialize_environment() {
+    # Create log directory
+    sudo mkdir -p "$LOG_DIR" 2>/dev/null || {
+        echo "Warning: Cannot create log directory $LOG_DIR, using /tmp"
+        LOG_FILE="/tmp/morpheus_precheck_$(date +%Y%m%d_%H%M%S).log"
+    }
+    
+    # Create temp directory
+    mkdir -p "$TEMP_DIR"
+    
+    # Initialize log file
+    {
+        echo "==============================================================================="
+        echo "Morpheus Data Environment - System Pre-Check Report"
+        echo "==============================================================================="
+        echo "Script Version: $SCRIPT_VERSION"
+        echo "Execution Date: $(date)"
+        echo "Hostname: $HOSTNAME"
+        echo "User: $(whoami)"
+        echo "==============================================================================="
+        echo ""
+    } > "$LOG_FILE"
+    
+    # Set trap for cleanup
+    trap cleanup_environment EXIT INT TERM
+}
+
+cleanup_environment() {
+    rm -rf "$TEMP_DIR" 2>/dev/null || true
+}
+
+#===============================================================================
+# VALIDATION FUNCTIONS
+#===============================================================================
+
+detect_distribution() {
+    print_section_header "SYSTEM DISTRIBUTION DETECTION"
+    
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO=$NAME
+        VERSION=$VERSION_ID
+        
+        print_status "INFO" "Distribution detected: $DISTRO $VERSION"
+        
+        if [[ "$DISTRO" == *"Red Hat"* ]] || [[ "$DISTRO" == *"CentOS"* ]] || [[ "$DISTRO" == *"Rocky"* ]]; then
+            PKG_MANAGER="yum"
+            print_status "INFO" "Package manager: YUM/DNF" "Red Hat family detected"
+        elif [[ "$DISTRO" == *"Ubuntu"* ]] || [[ "$DISTRO" == *"Debian"* ]]; then
+            PKG_MANAGER="apt"
+            print_status "INFO" "Package manager: APT" "Debian family detected"
+        else
+            PKG_MANAGER="unknown"
+            print_status "WARN" "Unknown distribution detected" "Proceeding with generic checks"
+        fi
+        print_status "PASS" "Distribution detection completed successfully"
+    else
+        print_status "FAIL" "Cannot detect Linux distribution" "/etc/os-release not found"
+        PKG_MANAGER="unknown"
+    fi
+}
+
+check_system_resources() {
+    print_section_header "SYSTEM RESOURCES VALIDATION"
+    
+    print_table_header
+    
+    # CPU Check
+    local cpu_cores=$(nproc)
+    if [ "$cpu_cores" -ge "$MIN_CPU_CORES" ]; then
+        print_table_row "CPU Cores" "PASS" "$cpu_cores cores (min: $MIN_CPU_CORES)"
+        print_status "PASS" "CPU cores requirement met" "$cpu_cores cores available"
+    else
+        print_table_row "CPU Cores" "FAIL" "$cpu_cores cores (min: $MIN_CPU_CORES)"
+        print_status "FAIL" "Insufficient CPU cores" "Found: $cpu_cores, Required: $MIN_CPU_CORES"
+    fi
+    
+    # Memory Check
+    local memory_gb=$(free -g | awk 'NR==2{printf "%.0f", $2}')
+    if [ "$memory_gb" -ge "$MIN_MEMORY_GB" ]; then
+        print_table_row "Memory" "PASS" "${memory_gb}GB (min: ${MIN_MEMORY_GB}GB)"
+        print_status "PASS" "Memory requirement met" "${memory_gb}GB available"
+    else
+        print_table_row "Memory" "FAIL" "${memory_gb}GB (min: ${MIN_MEMORY_GB}GB)"
+        print_status "FAIL" "Insufficient memory" "Found: ${memory_gb}GB, Required: ${MIN_MEMORY_GB}GB"
+    fi
+    
+    # Swap Check
+    local swap_total=$(free -h | awk 'NR==3{print $2}')
+    if [ "$swap_total" != "0B" ]; then
+        print_table_row "Swap Space" "PASS" "$swap_total available"
+        print_status "PASS" "Swap space is configured" "$swap_total available"
+    else
+        print_table_row "Swap Space" "WARN" "No swap configured"
+        print_status "WARN" "No swap space configured" "Consider adding swap for production"
+    fi
+    
+    print_table_footer
+    
+    # Memory details
+    local memory_total=$(free -h | awk 'NR==2{print $2}')
+    local memory_used=$(free -h | awk 'NR==2{print $3}')
+    local memory_free=$(free -h | awk 'NR==2{print $4}')
+    
+    echo ""
+    print_status "INFO" "Memory Details:"
+    print_status "INFO" "├─ Total: $memory_total"
+    print_status "INFO" "├─ Used: $memory_used"  
+    print_status "INFO" "└─ Free: $memory_free"
+}
+
+check_disk_space() {
+    print_section_header "DISK SPACE AND LAYOUT VALIDATION"
+    
+    # Root filesystem check
+    local root_space_gb=$(df -BG / | awk 'NR==2 {print $4}' | sed 's/G//')
+    
+    print_table_header
+    
+    if [ "$root_space_gb" -ge "$MIN_DISK_SPACE_GB" ]; then
+        print_table_row "Root Filesystem" "PASS" "${root_space_gb}GB free (min: ${MIN_DISK_SPACE_GB}GB)"
+        print_status "PASS" "Root filesystem space sufficient" "${root_space_gb}GB available"
+    else
+        print_table_row "Root Filesystem" "FAIL" "${root_space_gb}GB free (min: ${MIN_DISK_SPACE_GB}GB)"
+        print_status "FAIL" "Insufficient root filesystem space" "Available: ${root_space_gb}GB, Required: ${MIN_DISK_SPACE_GB}GB"
+    fi
+    
+    # Check for separate partitions
+    local critical_mounts=("/var" "/opt" "/tmp")
+    for mount_point in "${critical_mounts[@]}"; do
+        if mountpoint -q "$mount_point" 2>/dev/null; then
+            local space=$(df -BG "$mount_point" | awk 'NR==2 {print $4}' | sed 's/G//')
+            print_table_row "$mount_point partition" "PASS" "Separate mount: ${space}GB free"
+            print_status "PASS" "Separate $mount_point partition found" "${space}GB available"
+        else
+            print_table_row "$mount_point partition" "WARN" "Using root filesystem"
+            print_status "WARN" "No separate $mount_point partition" "Consider separate partition for production"
+        fi
+    done
+    
+    print_table_footer
+    
+    # Show filesystem details
+    echo ""
+    print_status "INFO" "Current filesystem layout:"
+    df -h | grep -E '^/dev|^tmpfs' | while IFS= read -r line; do
+        print_status "INFO" "  $line"
+    done
+    
+    # Disk I/O performance test
+    echo ""
+    print_status "INFO" "Testing disk I/O performance..."
+    if command -v dd >/dev/null 2>&1; then
+        local test_file="/tmp/morpheus_io_test_$$"
+        local io_test=$(dd if=/dev/zero of="$test_file" bs=1M count=100 2>&1 | grep -o '[0-9.]* [MG]B/s' | tail -1)
+        rm -f "$test_file" 2>/dev/null || true
+        if [ -n "$io_test" ]; then
+            print_status "PASS" "Disk I/O performance test completed" "$io_test"
+        fi
+    fi
+}
+
+check_network_connectivity() {
+    print_section_header "NETWORK CONNECTIVITY VALIDATION"
+    
+    print_table_header
+    
+    # Check default gateway
+    local default_gw=$(ip route | grep default | awk '{print $3}' | head -1)
+    if [ -n "$default_gw" ]; then
+        print_table_row "Default Gateway" "INFO" "$default_gw"
+        print_status "PASS" "Default gateway configured" "$default_gw"
+        
+        if ping -c 3 -W 2 "$default_gw" >/dev/null 2>&1; then
+            print_table_row "Gateway Connectivity" "PASS" "Reachable"
+            print_status "PASS" "Default gateway is reachable" "Ping successful"
+        else
+            print_table_row "Gateway Connectivity" "FAIL" "Not reachable"
+            print_status "FAIL" "Default gateway is not reachable" "Check network configuration"
+        fi
+    else
+        print_table_row "Default Gateway" "FAIL" "Not configured"
+        print_status "FAIL" "No default gateway configured" "Network configuration required"
+    fi
+    
+    # Check internet connectivity
+    local internet_hosts=("8.8.8.8" "1.1.1.1" "google.com")
+    local internet_ok=false
+    for host in "${internet_hosts[@]}"; do
+        if ping -c 3 -W 2 "$host" >/dev/null 2>&1; then
+            print_table_row "Internet Connectivity" "PASS" "Connected via $host"
+            print_status "PASS" "Internet connectivity verified" "Successfully reached $host"
+            internet_ok=true
+            break
+        fi
+    done
+    
+    if [ "$internet_ok" = false ]; then
+        print_table_row "Internet Connectivity" "FAIL" "No connectivity"
+        print_status "FAIL" "No internet connectivity detected" "Check network/firewall settings"
+    fi
+    
+    print_table_footer
+    
+    # Network interface details
+    echo ""
+    print_status "INFO" "Network interface summary:"
+    ip addr show | grep -E '^[0-9]+:|inet ' | while IFS= read -r line; do
+        if [[ $line =~ ^[0-9]+: ]]; then
+            print_status "INFO" "  Interface: $(echo "$line" | awk '{print $2}' | sed 's/:$//')"
+        elif [[ $line =~ inet\ [0-9] ]]; then
+            local ip=$(echo "$line" | awk '{print $2}')
+            print_status "INFO" "    └─ IP: $ip"
+        fi
+    done
+}
+
+check_dns_configuration() {
+    print_section_header "DNS CONFIGURATION VALIDATION"
+    
+    print_table_header
+    
+    # Check DNS servers
+    if [ -f /etc/resolv.conf ]; then
+        local dns_servers=$(grep -E '^nameserver' /etc/resolv.conf | awk '{print $2}')
+        if [ -n "$dns_servers" ]; then
+            local dns_count=$(echo "$dns_servers" | wc -l)
+            print_table_row "DNS Servers" "PASS" "$dns_count server(s) configured"
+            print_status "PASS" "DNS servers configured" "$dns_count nameserver(s) found"
+        else
+            print_table_row "DNS Servers" "FAIL" "No servers configured"
+            print_status "FAIL" "No DNS servers configured" "Check /etc/resolv.conf"
+        fi
+    else
+        print_table_row "DNS Servers" "FAIL" "/etc/resolv.conf missing"
+        print_status "FAIL" "/etc/resolv.conf not found" "DNS configuration missing"
+    fi
+    
+    # Test DNS resolution
+    local test_domains=("google.com" "github.com" "docker.com")
+    local dns_working=0
+    for domain in "${test_domains[@]}"; do
+        if nslookup "$domain" >/dev/null 2>&1; then
+            ((dns_working++))
+        fi
+    done
+    
+    if [ "$dns_working" -eq "${#test_domains[@]}" ]; then
+        print_table_row "DNS Resolution" "PASS" "All test domains resolved"
+        print_status "PASS" "DNS resolution working" "All test domains resolved successfully"
+    elif [ "$dns_working" -gt 0 ]; then
+        print_table_row "DNS Resolution" "WARN" "$dns_working/${#test_domains[@]} domains resolved"
+        print_status "WARN" "Partial DNS resolution" "$dns_working of ${#test_domains[@]} domains resolved"
+    else
+        print_table_row "DNS Resolution" "FAIL" "No domains resolved"
+        print_status "FAIL" "DNS resolution not working" "Cannot resolve external domains"
+    fi
+    
+    # Check hostname configuration
+    local hostname_short=$(hostname)
+    local fqdn=$(hostname -f 2>/dev/null || echo "N/A")
+    
+    if [ "$fqdn" != "N/A" ] && [ "$fqdn" != "$hostname_short" ]; then
+        print_table_row "FQDN Configuration" "PASS" "$fqdn"
+        print_status "PASS" "FQDN is properly configured" "$fqdn"
+    else
+        print_table_row "FQDN Configuration" "WARN" "May not be configured"
+        print_status "WARN" "FQDN may not be properly configured" "Consider setting up proper FQDN"
+    fi
+    
+    print_table_footer
+}
+
+check_required_ports() {
+    print_section_header "REQUIRED PORTS VALIDATION"
+    
+    print_status "INFO" "Checking port availability for Morpheus services:"
+    echo ""
+    
+    print_table_header
+    
+    local ports_available=0
+    local ports_in_use=0
+    
+    for port in "${REQUIRED_PORTS[@]}"; do
+        local port_status="AVAILABLE"
+        local port_details="Port is free"
+        
+        if command -v netstat >/dev/null 2>&1; then
+            if netstat -tuln | grep -q ":$port "; then
+                port_status="IN_USE"
+                port_details="Port already in use"
+                ((ports_in_use++))
+            else
+                ((ports_available++))
+            fi
+        elif command -v ss >/dev/null 2>&1; then
+            if ss -tuln | grep -q ":$port "; then
+                port_status="IN_USE"
+                port_details="Port already in use"
+                ((ports_in_use++))
+            else
+                ((ports_available++))
+            fi
+        else
+            port_status="UNKNOWN"
+            port_details="Cannot check (no netstat/ss)"
+        fi
+        
+        case $port_status in
+            "AVAILABLE")
+                print_table_row "Port $port" "PASS" "$port_details"
+                print_status "PASS" "Port $port is available"
+                ;;
+            "IN_USE")
+                if [ "$port" -eq 22 ]; then
+                    print_table_row "Port $port (SSH)" "INFO" "SSH service running"
+                    print_status "INFO" "Port $port in use by SSH" "Expected for remote access"
+                else
+                    print_table_row "Port $port" "WARN" "$port_details"
+                    print_status "WARN" "Port $port is already in use" "May conflict with Morpheus services"
+                fi
+                ;;
+            "UNKNOWN")
+                print_table_row "Port $port" "WARN" "$port_details"
+                print_status "WARN" "Cannot check port $port" "netstat/ss tools not available"
+                ;;
+        esac
+    done
+    
+    print_table_footer
+    
+    # Firewall status
+    echo ""
+    print_status "INFO" "Firewall Configuration:"
+    if command -v ufw >/dev/null 2>&1; then
+        local ufw_status=$(ufw status | head -1)
+        print_status "INFO" "├─ UFW Firewall: $ufw_status"
+    elif command -v firewall-cmd >/dev/null 2>&1; then
+        if systemctl is-active firewalld >/dev/null 2>&1; then
+            print_status "INFO" "├─ Firewalld: Active"
+        else
+            print_status "INFO" "├─ Firewalld: Inactive"
+        fi
+    else
+        print_status "INFO" "├─ No common firewall tools detected"
+    fi
+    
+    print_status "INFO" "└─ Ports summary: $ports_available available, $ports_in_use in use"
+}
+
+check_package_manager() {
+    print_section_header "PACKAGE MANAGER VALIDATION"
+    
+    print_table_header
+    
+    case $PKG_MANAGER in
+        "yum")
+            if yum repolist >/dev/null 2>&1; then
+                local repo_count=$(yum repolist 2>/dev/null | grep -c "repo id" || echo "0")
+                print_table_row "YUM Repositories" "PASS" "$repo_count repositories available"
+                print_status "PASS" "YUM repositories accessible" "$repo_count repositories found"
+            else
+                print_table_row "YUM Repositories" "FAIL" "Not accessible"
+                print_status "FAIL" "YUM repositories not accessible" "Check repository configuration"
+            fi
+            
+            if yum list available curl >/dev/null 2>&1; then
+                print_table_row "Package Query" "PASS" "Can query packages"
+                print_status "PASS" "Can query packages via YUM"
+            else
+                print_table_row "Package Query" "FAIL" "Cannot query packages"
+                print_status "FAIL" "Cannot query packages via YUM"
+            fi
+            ;;
+            
+        "apt")
+            if apt-get update >/dev/null 2>&1; then
+                print_table_row "APT Repositories" "PASS" "Update successful"
+                print_status "PASS" "APT repositories accessible" "Repository update completed"
+            else
+                print_table_row "APT Repositories" "FAIL" "Update failed"
+                print_status "FAIL" "APT repositories update failed" "Check sources.list configuration"
+            fi
+            
+            if apt-cache search curl >/dev/null 2>&1; then
+                print_table_row "Package Search" "PASS" "Can search packages"
+                print_status "PASS" "Can search packages via APT"
+            else
+                print_table_row "Package Search" "FAIL" "Cannot search packages"
+                print_status "FAIL" "Cannot search packages via APT"
+            fi
+            ;;
+            
+        *)
+            print_table_row "Package Manager" "WARN" "Unknown package manager"
+            print_status "WARN" "Unknown package manager detected" "Manual verification required"
+            ;;
+    esac
+    
+    print_table_footer
+}
+
+check_system_services() {
+    print_section_header "SYSTEM SERVICES VALIDATION"
+    
+    print_table_header
+    
+    # Check systemd
+    if command -v systemctl >/dev/null 2>&1; then
+        print_table_row "Systemd" "PASS" "Available and functional"
+        print_status "PASS" "Systemd service manager available"
+    else
+        print_table_row "Systemd" "WARN" "Not available"
+        print_status "WARN" "Systemd not available" "Using alternative service manager"
+    fi
+    
+    # Check important services
+    local services=("sshd" "ssh" "network" "NetworkManager")
+    local active_services=0
+    
+    for service in "${services[@]}"; do
+        if systemctl is-active "$service" >/dev/null 2>&1; then
+            print_table_row "Service: $service" "PASS" "Active and running"
+            print_status "PASS" "Service $service is active"
+            ((active_services++))
+        elif systemctl list-units --type=service 2>/dev/null | grep -q "$service"; then
+            print_table_row "Service: $service" "WARN" "Exists but inactive"
+            print_status "WARN" "Service $service exists but is not active"
+        fi
+    done
+    
+    # Check Docker
+    if command -v docker >/dev/null 2>&1; then
+        local docker_version=$(docker --version 2>/dev/null | awk '{print $3}' | sed 's/,$//')
+        print_table_row "Docker" "PASS" "Installed: $docker_version"
+        print_status "PASS" "Docker is installed" "Version: $docker_version"
+        
+        if systemctl is-active docker >/dev/null 2>&1; then
+            print_table_row "Docker Service" "PASS" "Running"
+            print_status "PASS" "Docker service is running"
+        else
+            print_table_row "Docker Service" "WARN" "Not running"
+            print_status "WARN" "Docker installed but service not running" "Start with: systemctl start docker"
+        fi
+    else
+        print_table_row "Docker" "INFO" "Not installed"
+        print_status "INFO" "Docker not installed" "May be required for Morpheus components"
+    fi
+    
+    # Check time synchronization
+    if command -v chronyd >/dev/null 2>&1 || command -v ntpd >/dev/null 2>&1; then
+        print_table_row "Time Sync" "PASS" "Service available"
+        print_status "PASS" "Time synchronization service available"
+    else
+        print_table_row "Time Sync" "WARN" "No service detected"
+        print_status "WARN" "No time synchronization service detected" "Install chrony or ntp"
+    fi
+    
+    print_table_footer
+}
+
+check_security_settings() {
+    print_section_header "SECURITY SETTINGS VALIDATION"
+    
+    print_table_header
+    
+    # Check SELinux (Red Hat family)
+    if command -v getenforce >/dev/null 2>&1; then
+        local selinux_status=$(getenforce)
+        case $selinux_status in
+            "Enforcing")
+                print_table_row "SELinux" "WARN" "Enforcing mode"
+                print_status "WARN" "SELinux is enforcing" "May require configuration for Morpheus"
+                ;;
+            "Permissive")
+                print_table_row "SELinux" "INFO" "Permissive mode"
+                print_status "INFO" "SELinux is in permissive mode"
+                ;;
+            "Disabled")
+                print_table_row "SELinux" "INFO" "Disabled"
+                print_status "INFO" "SELinux is disabled"
+                ;;
+        esac
+    fi
+    
+    # Check AppArmor (Ubuntu/Debian)
+    if command -v aa-status >/dev/null 2>&1; then
+        if aa-status >/dev/null 2>&1; then
+            print_table_row "AppArmor" "WARN" "Active"
+            print_status "WARN" "AppArmor is active" "May require configuration for Morpheus"
+        else
+            print_table_row "AppArmor" "INFO" "Inactive"
+            print_status "INFO" "AppArmor is not active"
+        fi
+    fi
+    
+    # Check sudo access
+    if sudo -n true 2>/dev/null; then
+        print_table_row "Sudo Access" "PASS" "Available"
+        print_status "PASS" "Current user has sudo access"
+    else
+        print_table_row "Sudo Access" "WARN" "May not be available"
+        print_status "WARN" "Current user may not have sudo access" "Required for installation"
+    fi
+    
+    print_table_footer
+}
+
+check_morpheus_specific() {
+    print_section_header "MORPHEUS-SPECIFIC REQUIREMENTS"
+    
+    print_table_header
+    
+    # Check Java
+    if command -v java >/dev/null 2>&1; then
+        local java_version=$(java -version 2>&1 | head -1 | awk -F '"' '{print $2}')
+        print_table_row "Java Runtime" "PASS" "Installed: $java_version"
+        print_status "PASS" "Java is installed" "Version: $java_version"
+    else
+        print_table_row "Java Runtime" "INFO" "Not installed"
+        print_status "INFO" "Java not installed" "May be required for Morpheus components"
+    fi
+    
+    # Check required tools
+    local tools_available=0
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            local tool_path=$(which "$tool")
+            print_table_row "Tool: $tool" "PASS" "Available at $tool_path"
+            print_status "PASS" "Required tool '$tool' is available"
+            ((tools_available++))
+        else
+            print_table_row "Tool: $tool" "WARN" "Not installed"
+            print_status "WARN" "Required tool '$tool' is not installed" "Install before deployment"
+        fi
+    done
+    
+    print_table_footer
+    
+    # System limits
+    echo ""
+    print_status "INFO" "System Limits Analysis:"
+    local open_files=$(ulimit -n)
+    local max_processes=$(ulimit -u)
+    print_status "INFO" "├─ Open files limit: $open_files"
+    print_status "INFO" "└─ Max user processes: $max_processes"
+    
+    if [ "$open_files" -lt 65536 ]; then
+        print_status "WARN" "Open files limit may be too low for production" "Consider increasing to 65536"
+    fi
+    
+    # Virtualization detection
+    echo ""
+    if [ -f /.dockerenv ]; then
+        print_status "INFO" "Environment: Docker container detected"
+    elif command -v systemd-detect-virt >/dev/null 2>&1; then
+        local virt_type=$(systemd-detect-virt)
+        if [ "$virt_type" != "none" ]; then
+            print_status "INFO" "Environment: Virtualization detected" "Platform: $virt_type"
+        else
+            print_status "INFO" "Environment: Physical hardware detected"
+        fi
+    fi
+}
+
+generate_executive_summary() {
+    print_section_header "EXECUTIVE SUMMARY"
+    
+    local deployment_readiness="NOT READY"
+    
+    if [ "$CRITICAL_ISSUES" -eq 0 ] && [ "$FAILED_CHECKS" -eq 0 ]; then
+        if [ "$WARNING_CHECKS" -eq 0 ]; then
+            deployment_readiness="READY"
+        else
+            deployment_readiness="MOSTLY READY"
+        fi
+    elif [ "$CRITICAL_ISSUES" -eq 0 ] && [ "$FAILED_CHECKS" -le 2 ]; then
+        deployment_readiness="NEEDS ATTENTION"
+    fi
+    
+    # Create executive summary table
+    echo -e "${BOLD}${WHITE}System Readiness Assessment:${NC}"
+    echo ""
+    
+    local summary_width=75
+    echo -e "${BOLD}${CYAN}$(printf '┌─%-*s─┐' $((summary_width-2)) '─────────────────────────────────────────────────────────────────────────')${NC}"
+    printf "${BOLD}${WHITE}│ %-*s │${NC}\n" $((summary_width-2)) "MORPHEUS DATA ENVIRONMENT - SYSTEM PRE-CHECK REPORT"
+    echo -e "${BOLD}${CYAN}$(printf '├─%-*s─┤' $((summary_width-2)) '─────────────────────────────────────────────────────────────────────────')${NC}"
+    printf "│ %-20s │ %-*s │\n" "Hostname:" $((summary_width-25)) "$HOSTNAME"
+    printf "│ %-20s │ %-*s │\n" "Date:" $((summary_width-25)) "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf "│ %-20s │ %-*s │\n" "Distribution:" $((summary_width-25)) "$DISTRO $VERSION"
+    printf "│ %-20s │ %-*s │\n" "Script Version:" $((summary_width-25)) "$SCRIPT_VERSION"
+    echo -e "${BOLD}${CYAN}$(printf '├─%-*s─┤' $((summary_width-2)) '─────────────────────────────────────────────────────────────────────────')${NC}"
+    
+    # Status indicators
+    local readiness_color=""
+    case $deployment_readiness in
+        "READY") readiness_color="${GREEN}" ;;
+        "MOSTLY READY") readiness_color="${YELLOW}" ;;
+        "NEEDS ATTENTION") readiness_color="${YELLOW}" ;;
+        "NOT READY") readiness_color="${RED}" ;;
+    esac
+    
+    printf "│ %-20s │ ${readiness_color}%-*s${NC} │\n" "Deployment Status:" $((summary_width-25)) "$deployment_readiness"
+    printf "│ %-20s │ ${GREEN}%-*s${NC} │\n" "Checks Passed:" $((summary_width-25)) "$PASSED_CHECKS"
+    printf "│ %-20s │ ${YELLOW}%-*s${NC} │\n" "Warnings:" $((summary_width-25)) "$WARNING_CHECKS"
+    printf "│ %-20s │ ${RED}%-*s${NC} │\n" "Failed/Critical:" $((summary_width-25)) "$FAILED_CHECKS"
+    printf "│ %-20s │ %-*s │\n" "Total Checks:" $((summary_width-25)) "$TOTAL_CHECKS"
+    
+    echo -e "${BOLD}${CYAN}$(printf '└─%-*s─┘' $((summary_width-2)) '─────────────────────────────────────────────────────────────────────────')${NC}"
+    
+    echo ""
+    
+    # Final recommendations
+    case $deployment_readiness in
+        "READY")
+            echo -e "${BOLD}${GREEN}🎉 SYSTEM IS READY FOR MORPHEUS DEPLOYMENT${NC}"
+            print_status "PASS" "All critical requirements met"
+            print_status "PASS" "No warnings or issues detected"
+            print_status "INFO" "Proceed with Morpheus installation"
+            ;;
+        "MOSTLY READY")
+            echo -e "${BOLD}${YELLOW}⚠️  SYSTEM IS MOSTLY READY WITH MINOR WARNINGS${NC}"
+            print_status "PASS" "All critical requirements met"
+            print_status "WARN" "Review warnings before deployment"
+            print_status "INFO" "Consider addressing warnings for optimal performance"
+            ;;
+        "NEEDS ATTENTION")
+            echo -e "${BOLD}${YELLOW}⚠️  SYSTEM NEEDS ATTENTION BEFORE DEPLOYMENT${NC}"
+            print_status "WARN" "Some requirements not met"
+            print_status "WARN" "Address failed checks before proceeding"
+            ;;
+        "NOT READY")
+            echo -e "${BOLD}${RED}🚨 SYSTEM NOT READY FOR DEPLOYMENT${NC}"
+            print_status "CRITICAL" "Critical requirements not met"
+            print_status "CRITICAL" "Resolve all issues before proceeding"
+            ;;
+    esac
+    
+    echo ""
+    print_status "INFO" "Detailed log file: $LOG_FILE"
+    
+    # Set exit code based on readiness
+    case $deployment_readiness in
+        "READY") return 0 ;;
+        "MOSTLY READY") return 2 ;;
+        "NEEDS ATTENTION") return 2 ;;
+        "NOT READY") return 1 ;;
+    esac
+}
+
+#===============================================================================
+# MAIN EXECUTION
+#===============================================================================
+
+main() {
+    # Clear screen and show professional header
+    clear
+    
+    echo -e "${BOLD}${CYAN}"
+    echo "==============================================================================="
+    echo "                    MORPHEUS DATA ENVIRONMENT"
+    echo "                 Production System Pre-Check Script"
+    echo "                         Version $SCRIPT_VERSION"
+    echo "==============================================================================="
+    echo -e "${NC}"
+    echo -e "${WHITE}Hostname:${NC} $HOSTNAME"
+    echo -e "${WHITE}Date:${NC}     $(date)"
+    echo -e "${WHITE}User:${NC}     $(whoami)"
+    echo -e "${WHITE}Log:${NC}      $LOG_FILE"
+    echo ""
+    
+    # Initialize environment
+    initialize_environment
+    
+    # Execute validation modules
+    detect_distribution
+    check_system_resources
+    check_disk_space
+    check_network_connectivity
+    check_dns_configuration
+    check_required_ports
+    check_package_manager
+    check_system_services
+    check_security_settings
+    check_morpheus_specific
+    
+    # Generate final report
+    local exit_code=0
+    generate_executive_summary || exit_code=$?
+    
+    echo ""
+    echo -e "${BOLD}${CYAN}===============================================================================${NC}"
+    echo -e "${BOLD}${WHITE}Pre-check validation completed. Review summary and log file for details.${NC}"
+    echo -e "${BOLD}${CYAN}===============================================================================${NC}"
+    
+    exit $exit_code
+}
+
+# Script entry point
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
