@@ -506,7 +506,45 @@ check_rabbitmq() {
         echo "  Management Port: $rabbitmq_mgmt_port"
         echo ""
         
-        # Check RabbitMQ service
+        # Source RabbitMQ profile for proper command execution
+        echo "=== RabbitMQ Service Status ==="
+        if [[ -f "/opt/morpheus/embedded/rabbitmq/.profile" ]]; then
+            echo "✓ RabbitMQ profile found, sourcing for command execution..."
+            
+            # Create a temporary script to source profile and run commands
+            cat > /tmp/rabbitmq_check.sh << 'RABBIT_EOF'
+#!/bin/bash
+source /opt/morpheus/embedded/rabbitmq/.profile 2>/dev/null
+echo "RabbitMQ Cluster Status:"
+rabbitmqctl cluster_status 2>/dev/null || echo "Could not retrieve cluster status"
+echo ""
+echo "RabbitMQ Node Status:"
+rabbitmqctl status 2>/dev/null | head -15 || echo "Could not retrieve node status"
+RABBIT_EOF
+            
+            chmod +x /tmp/rabbitmq_check.sh
+            /tmp/rabbitmq_check.sh
+            rm -f /tmp/rabbitmq_check.sh
+            
+        else
+            echo "⚠ RabbitMQ profile not found at /opt/morpheus/embedded/rabbitmq/.profile"
+            echo "Attempting direct rabbitmqctl commands..."
+            
+            # Fallback to direct commands
+            if check_command rabbitmqctl; then
+                echo "RabbitMQ Cluster Status:"
+                rabbitmqctl cluster_status 2>/dev/null || echo "Could not retrieve cluster status"
+                
+                echo ""
+                echo "RabbitMQ Node Status:"
+                rabbitmqctl status 2>/dev/null | head -15 || echo "Could not retrieve node status"
+            else
+                echo "✗ rabbitmqctl command not available"
+            fi
+        fi
+        
+        echo ""
+        echo "=== RabbitMQ Process Check ==="
         if systemctl is-active --quiet rabbitmq-server; then
             echo "✓ RabbitMQ service is running"
             log_success "RabbitMQ service is active"
@@ -515,29 +553,137 @@ check_rabbitmq() {
             log_error "RabbitMQ service is not active"
         fi
         
-        # Check ports
+        # Check if RabbitMQ processes are running
+        local rabbit_processes=$(ps aux | grep -E "[r]abbitmq|[b]eam" | wc -l)
+        if [[ $rabbit_processes -gt 0 ]]; then
+            echo "✓ RabbitMQ processes detected: $rabbit_processes"
+            echo "  Process details:"
+            ps aux | grep -E "[r]abbitmq|[b]eam" | head -3 | sed 's/^/    /'
+        else
+            echo "✗ No RabbitMQ processes detected"
+        fi
+        
+        echo ""
+        echo "=== Port Connectivity ==="
+        # Check AMQP port
         if test_port "$rabbitmq_host" "$rabbitmq_port"; then
             echo "✓ RabbitMQ AMQP port ($rabbitmq_port) is accessible"
         else
             echo "✗ RabbitMQ AMQP port ($rabbitmq_port) is not accessible"
+            log_warning "RabbitMQ AMQP port not accessible"
         fi
         
+        # Check Management port
         if test_port "$rabbitmq_host" "$rabbitmq_mgmt_port"; then
             echo "✓ RabbitMQ Management port ($rabbitmq_mgmt_port) is accessible"
         else
             echo "✗ RabbitMQ Management port ($rabbitmq_mgmt_port) is not accessible"
+            echo "  Note: Management plugin may not be enabled"
         fi
         
-        # RabbitMQ status using rabbitmqctl if available
-        if check_command rabbitmqctl; then
-            echo ""
-            echo "RabbitMQ Status:"
-            rabbitmqctl status 2>/dev/null | head -20 || echo "Could not retrieve RabbitMQ status"
+        echo ""
+        echo "=== RabbitMQ Management Console ==="
+        
+        # Check if management plugin is enabled
+        if [[ -f "/opt/morpheus/embedded/rabbitmq/.profile" ]]; then
+            # Check management plugin status
+            cat > /tmp/rabbitmq_mgmt_check.sh << 'MGMT_EOF'
+#!/bin/bash
+source /opt/morpheus/embedded/rabbitmq/.profile 2>/dev/null
+echo "Management Plugin Status:"
+rabbitmq-plugins list | grep rabbitmq_management || echo "Could not check plugin status"
+MGMT_EOF
             
-            echo ""
-            echo "RabbitMQ Cluster Status:"
-            rabbitmqctl cluster_status 2>/dev/null || echo "Could not retrieve cluster status"
+            chmod +x /tmp/rabbitmq_mgmt_check.sh
+            /tmp/rabbitmq_mgmt_check.sh
+            rm -f /tmp/rabbitmq_mgmt_check.sh
         fi
+        
+        # Show management console access information
+        echo ""
+        echo "Management Console Access:"
+        echo "  URL: http://$rabbitmq_host:$rabbitmq_mgmt_port"
+        echo "  Username: morpheus"
+        
+        # Get password from secrets file
+        if [[ -f "/etc/morpheus/morpheus-secrets.json" ]]; then
+            echo "  Password location: /etc/morpheus/morpheus-secrets.json"
+            echo "  Password key: rabbitmq > morpheus_password"
+            
+            # Try to extract password (safely)
+            if check_command jq; then
+                local rabbit_password=$(jq -r '.rabbitmq.morpheus_password // empty' /etc/morpheus/morpheus-secrets.json 2>/dev/null)
+                if [[ -n "$rabbit_password" && "$rabbit_password" != "null" ]]; then
+                    echo "  ✓ Password found in secrets file"
+                else
+                    echo "  ⚠ Password not found in expected location"
+                fi
+            else
+                echo "  ⚠ jq not available to parse secrets file"
+                echo "  Use: cat /etc/morpheus/morpheus-secrets.json | grep -A 3 rabbitmq"
+            fi
+        else
+            echo "  ⚠ Secrets file not found at /etc/morpheus/morpheus-secrets.json"
+        fi
+        
+        echo ""
+        echo "=== RabbitMQ Queue Information ==="
+        
+        # Get queue information if possible
+        if [[ -f "/opt/morpheus/embedded/rabbitmq/.profile" ]]; then
+            cat > /tmp/rabbitmq_queues.sh << 'QUEUE_EOF'
+#!/bin/bash
+source /opt/morpheus/embedded/rabbitmq/.profile 2>/dev/null
+echo "Queue Summary:"
+rabbitmqctl list_queues name messages consumers 2>/dev/null | head -10 || echo "Could not retrieve queue information"
+echo ""
+echo "Virtual Host Information:"
+rabbitmqctl list_vhosts 2>/dev/null || echo "Could not retrieve vhost information"
+QUEUE_EOF
+            
+            chmod +x /tmp/rabbitmq_queues.sh
+            /tmp/rabbitmq_queues.sh
+            rm -f /tmp/rabbitmq_queues.sh
+        fi
+        
+        echo ""
+        echo "=== RabbitMQ Configuration Summary ==="
+        
+        # Show key configuration details
+        if [[ "$IS_AIO" == true ]]; then
+            echo "Deployment: All-In-One (single node)"
+            echo "Expected behavior: Single RabbitMQ node"
+        else
+            echo "Deployment: HA Cluster"
+            echo "Expected behavior: Multi-node RabbitMQ cluster"
+            
+            # For HA deployments, show cluster-specific information
+            if [[ -f "/opt/morpheus/embedded/rabbitmq/.profile" ]]; then
+                echo ""
+                echo "Cluster Node Information:"
+                cat > /tmp/rabbitmq_cluster.sh << 'CLUSTER_EOF'
+#!/bin/bash
+source /opt/morpheus/embedded/rabbitmq/.profile 2>/dev/null
+echo "Running Nodes:"
+rabbitmqctl cluster_status 2>/dev/null | grep -A 10 "running_nodes" | head -10 || echo "Could not retrieve running nodes"
+echo ""
+echo "Cluster Name:"
+rabbitmqctl cluster_status 2>/dev/null | grep "cluster_name" || echo "Could not retrieve cluster name"
+CLUSTER_EOF
+                
+                chmod +x /tmp/rabbitmq_cluster.sh
+                /tmp/rabbitmq_cluster.sh
+                rm -f /tmp/rabbitmq_cluster.sh
+            fi
+        fi
+        
+        echo ""
+        echo "Troubleshooting Commands:"
+        echo "  Enable management console: source /opt/morpheus/embedded/rabbitmq/.profile && rabbitmq-plugins enable rabbitmq_management"
+        echo "  Check cluster status: source /opt/morpheus/embedded/rabbitmq/.profile && rabbitmqctl cluster_status"
+        echo "  View queues: source /opt/morpheus/embedded/rabbitmq/.profile && rabbitmqctl list_queues"
+        echo "  Restart RabbitMQ: morpheus-ctl restart rabbitmq"
+        
     } | tee -a "$REPORT_FILE"
 }
 
