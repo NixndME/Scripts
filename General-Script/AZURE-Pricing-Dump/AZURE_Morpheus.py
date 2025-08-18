@@ -13,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 MORPHEUS_URL = "https://your-morpheus-instance.com"
 MORPHEUS_TOKEN = "your-morpheus-bearer-token"
 PRICE_PREFIX = "aswath"
-SKIP_SSL_VERIFY = True  # Set to False for production with valid certificates
+SKIP_SSL_VERIFY = False  # Set to True for production with valid certificates
 
 if SKIP_SSL_VERIFY:
     import ssl
