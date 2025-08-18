@@ -7,10 +7,13 @@ import time
 import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-MORPHEUS_URL = "https://morpheus-instance.com"
-MORPHEUS_TOKEN = "token"
+MORPHEUS_URL = "https://your-morpheus-instance.com"
+MORPHEUS_TOKEN = "your-morpheus-bearer-token"
 PRICE_PREFIX = "aswath"
+SKIP_SSL_VERIFY = True  # Set to False for production
 
 AZURE_CURRENCY = "USD"
 AZURE_REGIONS = [
@@ -45,17 +48,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class MorpheusClient:
-    def __init__(self, url: str, token: str):
+    def __init__(self, url: str, token: str, verify_ssl: bool = True):
         self.base_url = url.rstrip('/')
         self.headers = {
             'Authorization': f'Bearer {token}',
             'Content-Type': 'application/json'
         }
+        self.verify_ssl = verify_ssl
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        self.session.verify = verify_ssl
     
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}{endpoint}"
+        
+        if 'verify' not in kwargs:
+            kwargs['verify'] = self.verify_ssl
         
         for attempt in range(MAX_RETRIES):
             try:
@@ -357,10 +365,12 @@ def sync_azure_pricing():
     start_time = datetime.now()
     logger.info(f"Starting Azure pricing sync at {start_time}")
     logger.info(f"Configuration: Prefix={PRICE_PREFIX}, Regions={AZURE_REGIONS}, Services={AZURE_SERVICES}")
+    if SKIP_SSL_VERIFY:
+        logger.warning("SSL certificate verification is DISABLED")
     
     try:
         azure_client = AzurePricingClient(AZURE_CURRENCY)
-        morpheus_client = MorpheusClient(MORPHEUS_URL, MORPHEUS_TOKEN)
+        morpheus_client = MorpheusClient(MORPHEUS_URL, MORPHEUS_TOKEN, SKIP_SSL_VERIFY)
         converter = PricingConverter(PRICE_PREFIX)
         
         logger.info("Fetching Azure pricing data...")
@@ -448,9 +458,11 @@ def sync_azure_pricing():
 
 def test_configuration():
     logger.info("Testing configuration...")
+    if SKIP_SSL_VERIFY:
+        logger.warning("SSL certificate verification is DISABLED")
     
     try:
-        morpheus_client = MorpheusClient(MORPHEUS_URL, MORPHEUS_TOKEN)
+        morpheus_client = MorpheusClient(MORPHEUS_URL, MORPHEUS_TOKEN, SKIP_SSL_VERIFY)
         response = morpheus_client._make_request('GET', '/api/prices?max=1')
         logger.info("✓ Morpheus API connectivity successful")
     except Exception as e:
