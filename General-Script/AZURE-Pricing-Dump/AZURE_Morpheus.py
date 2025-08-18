@@ -13,7 +13,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 MORPHEUS_URL = "https://your-morpheus-instance.com"
 MORPHEUS_TOKEN = "your-morpheus-bearer-token"
 PRICE_PREFIX = "aswath"
-SKIP_SSL_VERIFY = True  # Set to False for production
+SKIP_SSL_VERIFY = True  # Set to False for production with valid certificates
+
+if SKIP_SSL_VERIFY:
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
 
 AZURE_CURRENCY = "USD"
 AZURE_REGIONS = [
@@ -62,12 +66,12 @@ class MorpheusClient:
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}{endpoint}"
         
-        if 'verify' not in kwargs:
-            kwargs['verify'] = self.verify_ssl
+        # Force SSL verification setting
+        kwargs['verify'] = self.verify_ssl
         
         for attempt in range(MAX_RETRIES):
             try:
-                response = self.session.request(method, url, **kwargs)
+                response = requests.request(method, url, headers=self.headers, **kwargs)
                 response.raise_for_status()
                 return response
             except requests.exceptions.RequestException as e:
