@@ -306,9 +306,9 @@ resource "aws_instance" "web" {
               AGENT_URL="https://morpheus.init0xff.com/public-archives/download/Morpheus%20Software/opsramp-agent_20.0.0-1_amd64.deb"
               AGENT_FILE="/var/tmp/opsramp-agent_20.0.0-1_amd64.deb"
               OPSRAMP_KEY="dJ2xMZQwy9E6JpzuMybD3k4zdAXCTjpy"
-              OPSRAMP_SECRET="hj5X96c2mMqXgkZJKWGkAQJSwbRV6UD9cU2D7wtNHJRG3VsjqrFujyeUTawVx3nR"
+              OPSRAMP_SECRET="xxxxxxx"
               OPSRAMP_SERVER="score.api.opsramp.com"
-              OPSRAMP_INTEGRATION="INTG-74b8cc38-9934-442c-8209-169d22641d15"
+              OPSRAMP_INTEGRATION="xxxx"
               
               # Track status
               OVERALL_STATUS="SUCCESS"
