@@ -2,5 +2,5 @@
   {"name": "DEV", "value": "development"},
   {"name": "QA", "value": "quality_assurance"},
   {"name": "Non-Prod", "value": "non_production"},
-  {"name": "PRODDD", "value": "production"}
+  {"name": "PROD", "value": "production"}
 ]
